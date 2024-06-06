@@ -1,20 +1,24 @@
 from flask import Flask, redirect, url_for, session, request
 from authlib.integrations.flask_client import OAuth
 import secrets
+import requests
 
 
 app = Flask(__name__)
 app.secret_key = 'random_secret_key'
 app.config['SESSION_COOKIE_NAME'] = 'linkedin-login-session'
 
+client_id='78ev5030fefrhp'
+client_secret='JsRHjvngGsN5CTY0'
+
 # Setup OAuth
 oauth = OAuth(app)
 linkedin = oauth.register(
     'linkedin',
-    client_id='78ev5030fefrhp',
-    client_secret='JsRHjvngGsN5CTY0',
+    client_id=client_id,
+    client_secret=client_secret,
     authorize_url='https://www.linkedin.com/oauth/v2/authorization',
-    authorize_params={'scope': 'openid profile email', 'nonce': secrets.token_urlsafe(16)},  # Include nonce
+    authorize_params={'scope': 'openid profile email'},  # Include nonce
     access_token_url='https://www.linkedin.com/oauth/v2/accessToken',
     access_token_params=None,
     client_kwargs={'scope': 'openid profile email'},
@@ -36,25 +40,60 @@ def logout():
 
 @app.route('/login/linkedin/authorized')
 def authorized():
+    print('Authorized')
     try:
         # Explicitly include client_secret in the token request
-        token = linkedin.authorize_access_token(
-            client_secret='JsRHjvngGsN5CTY0'
-        )
-        print('Token received:', token)
+        print('Requesting token')
+
+        # Extract the authorization code from the request
+        code = request.args.get('code')
+        if not code:
+            raise Exception('Authorization code not found.')
+
+        print('Authorization code:', code)
         
-        resp = linkedin.get('https://api.linkedin.com/v2/me')
-        user_info = resp.json()
-        print('User Info:', user_info)
+        # Define the parameters for the POST request
+        url = 'https://www.linkedin.com/oauth/v2/accessToken'
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        data = {
+            'grant_type': 'authorization_code',
+            'code': code,
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'redirect_uri': url_for('authorized', _external=True),
+        }
+
+        # Make the POST request
+        response = requests.post(url, headers=headers, data=data)
+        print('Response:', response.json())
+
+        access_token = response.json()['access_token']
         
-        resp_email = linkedin.get('https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))')
-        email_info = resp_email.json()
-        print('Email Info:', email_info)
+        print('Access token:', access_token)
+        # Define the endpoint and headers
+        url = 'https://api.linkedin.com/v2/userinfo'
+        headers = {
+            'Authorization': f'Bearer {access_token}'
+        }
+
+        # Make the GET request
+        response = requests.get(url, headers=headers)
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            user_info = response.json()
+            print('User Info:', user_info)
+        else:
+            print('Failed to get user info:', response.status_code, response.text)
         
-        return f'Logged in as: {user_info["localizedFirstName"]["localized"]["en_US"]} {email_info["elements"][0]["handle~"]["emailAddress"]}'
+        
+        return user_info
+        
+
     except Exception as e:
         print('Error during authorization:', str(e))
         return 'Authorization failed.'
+
 
 if __name__ == '__main__':
     app.run(debug=True)
